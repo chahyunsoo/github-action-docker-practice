@@ -1,16 +1,16 @@
-name: Spring Boot & Gralde CI/CD
+name: Java CI with Gradle # workflow 이름
 
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+
+permissions:
+  contents: read
 
 jobs:
   build:
+
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
     - uses: actions/checkout@v3
@@ -20,44 +20,42 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-   # Gradle Build를 위한 권한 부여
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+    - name: make application.yml
+      run: |
+        # create application.yml
+        cd ./src/main
+        mkdir resources
+        cd ./resources
 
-    # Gradle Build (test 제외)
+        # application.yml 파일 생성하기
+        touch ./application.yml
+
+        # Secrets에 저장한 값을 application.yml 파일에 쓰기
+        echo "${{ secrets.DATABASE }}" >> ./application.yml
+
+      shell: bash
+
     - name: Build with Gradle
-      run: ./gradlew clean build --exclude-task test
+      run: ./gradlew bootJar
 
-    # DockerHub 로그인
-    - name: DockerHub Login
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-    # Docker 이미지 빌드
-    - name: Docker Image Build
-      run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.PROJECT_NAME }} .
-
-    # DockerHub Push
-    - name: DockerHub Push
-      run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.PROJECT_NAME }}
-
-
-    # EC2 인스턴스 접속 및 애플리케이션 실행
-    - name: Application Run
+    ## 도커 이미지 빌드 후 도커허브에 push하기
+    - name: web docker build and push
+      run: |
+        docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
+        docker build -t ${{ secrets.DOCKER_REPO }} .
+        docker push ${{ secrets.DOCKER_REPO }}
+         
+    ## 서버에 접속하여 도커 이미지를 pull 받고 실행하기
+    - name: executing remote ssh commands using password
       uses: appleboy/ssh-action@v0.1.6
       with:
-        host: ${{ secrets.EC2_HOST }}
+        host: ${{ secrets.HOST }}
         username: ${{ secrets.EC2_USERNAME }}
-        key: ${{ secrets.EC2_KEY }}
-
+        key: ${{ secrets.KEY }}
+        port: 22
         script: |
-          sudo docker kill ${{ secrets.PROJECT_NAME }}
-          sudo docker rm -f ${{ secrets.PROJECT_NAME }}
-          sudo docker rmi ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.PROJECT_NAME }}
-          sudo docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.PROJECT_NAME }}
-
-          sudo docker run -p ${{ secrets.PORT }}:${{ secrets.PORT }} \
-          --name ${{ secrets.PROJECT_NAME }} \
-          -d ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.PROJECT_NAME }}
+          sudo docker stop prod-server
+          sudo docker rm prod-server
+          sudo docker image rm ${{ secrets.DOCKER_REPO }}
+          sudo docker pull ${{ secrets.DOCKER_REPO }}
+          sudo docker run -d -p 80:8080 ${{ secrets.DOCKER_REPO }}
